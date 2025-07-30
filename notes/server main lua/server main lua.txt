@@ -1,0 +1,118 @@
+below is the code for the server:
+
+---@diagnostic disable: undefined-global
+
+-- Welcome to CMServer!
+-- This is an example server with simple broadcast.
+-- The following api functions are available:
+-- api.register_event(str: name, function(LuaEvent): callback) -> void
+-- api.get_current_tick() -> number
+-- api.create_event(str: name, table: arguments) -> table (raw byte data)
+-- api.broadcast(table: data, bool: reliable) -> int (amount of successful data sends)
+-- api.send(str: uuid, table: data, bool: reliable) -> bool
+
+-- The following LuaEvent functions are available:
+-- LuaEvent:get_client() -> LuaClient
+-- LuaEvent:get_string(str: name) -> str
+-- LuaEvent:get_int(str: name) -> number (IMPORTANT! This is for fields broadcasted as int32!)
+-- LuaEvent:get_float(str: name) -> number (IMPORTANT! This is for fields broadcasted as float32!)
+-- LuaEvent:get_int64(str: name) -> number (IMPORTANT! This is for fields broadcasted as int64!)
+-- LuaEvent:get_num(str: name) -> number (IMPORTANT! This is for fields broadcasted as doubles!)
+-- LuaEvent:get_bool(str: name) -> bool
+-- In case of type mismatch, the functions should simply return nil.
+
+-- The following LuaClient functions are available:
+-- LuaClient:send_raw(data: table) -> bool (success)
+
+-- The following base lua functions have custom implementations:
+-- print(str, ...) -> void
+-- warn(str, ...) -> void
+-- error(str, ...) -> void (throws an error and exits the lua runtime)
+
+-- There's only one event guaranteed to be sent: disconnect. You shall not send any data in that event.
+-- All clients should ideally send an unreliable event in order to start receiving UDP updates. This will let the server backend know what port to send UDP packets to.
+
+-- IMPORTANT! DO NOT BROADCAST CLIENT UUIDs!
+local clients = {}
+
+local random = math.random
+local function generate_uuid()
+    local template ='xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'
+    return string.gsub(template, '[xy]', function (c)
+        local v = (c == 'x') and random(0, 0xf) or random(8, 0xb)
+        return string.format('%x', v)
+    end)
+end
+
+api.register_event("login", function(ev)
+    local uuid = ev:get_string("uuid")
+    print("Log on:", uuid)
+
+    local client = ev:get_client()
+    local sync = api.create_event("sync", {
+        ["count"] = #clients,
+        ["tick"] = tick
+    })
+    client:send_raw(sync, true)
+
+    for _, k in pairs(clients) do
+        local event = api.create_event("pos", {
+            ["x"] = k["x"],
+            ["y"] = k["y"],
+            ["id"] = k["id"]
+        })
+
+        client:send_raw(event, false)
+    end
+
+    clients[uuid] = {
+        ["x"] = 0,
+        ["y"] = 0,
+        ["id"] = generate_uuid()
+    }
+end)
+
+api.register_event("move", function(ev)
+    local uuid = ev:get_string("uuid")
+    local x = ev:get_num("x")
+    local y = ev:get_num("y")
+    
+    if clients[uuid] == nil then
+        clients[uuid] = {
+            ["id"] = generate_uuid()
+        }
+    end
+
+    clients[uuid]["x"] = math.min(math.max(x, 0), 500)
+    clients[uuid]["y"] = math.min(math.max(y, 0), 500)
+
+    local event = api.create_event("pos", {
+        ["x"] = x,
+        ["y"] = y,
+        ["id"] = clients[uuid]["id"]
+    });
+    api.broadcast(event, false)
+end)
+
+api.register_event("sync", function(ev)
+    local tick = api.get_current_tick()
+    local client = ev:get_client()
+    local sync = api.create_event("sync", {
+        ["count"] = #clients,
+        ["tick"] = tick
+    })
+    client:send_raw(sync, false)
+    
+    local event = api.create_event("pos", {
+        ["x"] = (50 + (300 - 50) * ((tick % 65) / 64)),
+        ["y"] = 150,
+        ["id"] = "server"
+    })
+    client:send_raw(event, false)
+end)
+
+api.register_event("disconnect", function(ev)
+    local uuid = ev:get_string("uuid")
+    clients[uuid] = nil
+    print("Client disposed on Lua backend:", uuid)
+end)

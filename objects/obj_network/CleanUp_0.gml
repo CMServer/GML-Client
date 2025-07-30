@@ -1,0 +1,2 @@
+network_destroy(socket_reliable);
+network_destroy(socket_unreliable);
